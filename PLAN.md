@@ -39,15 +39,19 @@ origin   = https://github.com/kimberxu/lightsb.git    (GitHub fork: fork=true, p
 fork 分支  stable   ← 上游 stable 线镜像，仅 rebase 锚点/升级判断，**不在其上开发**
           lightsb  ← 唯一工作分支，基线 = tag v1.14.2，默认分支
   └─ af6e64c3  Bump version (= v1.14.2)                      ← 基线
-     (待做)    docs: rewrite fork docs for lightsb            ← commit 0
+     2994aedb  docs: rewrite fork docs for lightsb            ← 已完成并推送（origin/lightsb）
      (待做)    sniff: restore override_destination for sniff action (§3)
      (待做)    test: sniff override_destination regression (§5.2)
      (待做)    ci: linux-amd64 build workflow (§4.2)
 fork tag   v1.14.2-lightsb.1  ← 对应产物，可追溯
 ```
 
-fork 现状（实测）：`heads = 41`、`tags = 632`（全部继承自上游）、`private=false`、`has_issues=false`、
-`git ls-remote --symref origin HEAD` → `ref: refs/heads/testing`（**默认分支随上游 = `testing`**）。
+fork 现状（实测，2026-10-01）：**`heads = 2`（`lightsb` 默认分支 + `stable` 镜像）**、`tags = 632`（全部继承自上游、
+非我方推送）、`fork=true`（parent/source = `SagerNet/sing-box`）、public、`has_issues=false`；
+`git ls-remote --symref origin HEAD` → `ref: refs/heads/lightsb`。
+
+工作副本：`/root/workspace/lightsb/repo`（本机 shallow clone，`--no-tags`；`origin` = fork，无 worktree 级 `upstream` remote。
+需要比对上游时用 `git fetch https://github.com/SagerNet/sing-box.git <ref>` 或临时 `git remote add upstream`）。
 
 ### 2.2 建分支与删分支（顺序不可颠倒）
 
@@ -64,10 +68,22 @@ git -C repo push -u origin lightsb
 gh api -X PATCH repos/kimberxu/lightsb -f default_branch=lightsb
 
 # 4) 保留 stable + lightsb，删除其余所有继承分支
-gh api repos/kimberxu/lightsb/branches --paginate --jq '.[].name' \
-  | grep -vxE 'lightsb|stable' \
-  | xargs -r -n1 -P4 gh api -X DELETE repos/kimberxu/lightsb/git/refs/heads/{}
+#    注意：REST 的 ref 路径必须对 '/' 做完整百分号编码；gh api 只替换 '-' 不编码 '/'
+#    （曾用 gh api -X DELETE .../heads/dependabot/go_modules/xxx 实测 422 Reference does not exist）
+python3 - <<'PY'
+import subprocess, urllib.parse
+names = subprocess.run(["gh","api","repos/kimberxu/lightsb/branches","--paginate","--jq",".[].name"],
+                       capture_output=True, text=True, check=True).stdout.split()
+for b in [n for n in names if n not in ("lightsb","stable")]:
+    gh = f"repos/kimberxu/lightsb/git/refs/heads/{urllib.parse.quote(b, safe='')}"
+    r = subprocess.run(["gh","api","-X","DELETE",gh], capture_output=True, text=True)
+    print("deleted" if r.returncode==0 else f"FAIL {b} {r.stderr.strip()[:80]}", b)
+PY
+# 另法（不改默认分支也能删，git 会原生编码 '/'）：git push origin --delete a b c
 ```
+
+> 实测教训：整批 `git push origin --delete <40 个含 '/' 的分支>` 在本机跑了 900s 未返回；`gh api` 单条串行 38 个约 75s 完成。
+> 批量删除前**必须**先确认默认分支不是待删分支，否则该条必失败。
 
 `stable` 保持为上游镜像（fork 的 ref 不会自动跟随上游），升级判断前刷新：
 
@@ -338,11 +354,15 @@ go build ./cmd/sing-box && go test ./route/... ./option/...
 ## 7. 当前状态
 
 - [x] 已完成：fork 建仓（`kimberxu/lightsb`，`fork=true`、parent/source = `SagerNet/sing-box`、public、`has_issues=false`）；
-  在本目录以 tag `v1.14.2` 复核全部基线事实（`route.go:367/754/878`、`option/rule_action.go:325`/`:180`、`rule/rule_action.go:107/510/516`、
+  以 tag `v1.14.2` 复核全部基线事实（`route.go:367/754/878`、`option/rule_action.go:325`/`:180`、`rule/rule_action.go:107/510/516`、
   `.gitignore:21-22`、`schema.json` 0 命中、`Makefile` schema 目标、`release/DEFAULT_BUILD_TAGS*`/`LDFLAGS`、移除提交归属 v1.13.1/v1.13.4、
   上游 issue/PR 状态、`test.yml` 触发与 matrix、`build.yml` 工具链步骤与 `CRONET_GO_VERSION`、`ubuntu-26.04`/Go 1.26.8）；
   §3 补丁 `git apply --check` 通过（rc=0）；fork 文档改写为 lightsb（本文件 + `AGENTS.md`）。
-- [ ] 未完成（下一步顺序）：fork 上建 `lightsb` 分支并推文档提交（§2.2 步骤 1–2）→ 设默认分支为 `lightsb` 并删除其余 39 个分支（§2.2 步骤 3–4）
-  → 落地 §3 补丁提交 → 写 `test/sniff_override_test.go`（§5.2）并做 fail-before/pass-after 验证 → 写 `build-lightsb.yml` 并删除上游 workflow（§4.2）
-  → 首次 Actions 构建 → 下载三个产物核对 §5.1/§5.2/`sing-box version`。
+- [x] 已完成（2026-10-01，实测）：建工作副本 `repo/`、以 `v1.14.2` 建分支 `lightsb`、提交并推送 `2994aedb docs: rewrite fork docs for lightsb`
+  （remote blob 校验一致：`AGENTS.md 1a647e2e…`、`PLAN.md 10bc1b0b…`）；`PATCH default_branch=lightsb` 生效；
+  删除继承的 39 个分支（`docs`、`dev-*`、`dependabot/*`、`renovate/*`、`copilot/*`、`testing`、`unstable`、`oldstable`、`archive`、
+  `ccm-ocm-improvements`、`cloudflared`、`fix-acme-http-tls-challenge`、`draft-windows-auto-redirect`、`revert-4376-*`、`usbip`、`dev-ping` 等），
+  现存 ref 仅 `lightsb`(2994aedb) + `stable`(777dec2b)，632 个上游 tag 保留未动。
+- [ ] 未完成（下一步顺序）：落地 §3 补丁提交 → 写 `test/sniff_override_test.go`（§5.2）并做 fail-before/pass-after 验证
+  → 写 `build-lightsb.yml` 并删除上游 workflow（§4.2）→ 首次 Actions 构建 → 下载三个产物核对 §5.1/§5.2/`sing-box version`。
   **产物与补丁均未实际构建验证过**（仅 `git apply --check` 静态验证）；当前结论来自源码静态核对与官方二进制/API 实测，不构成"已跑通"。
