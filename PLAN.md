@@ -400,6 +400,18 @@ go build ./cmd/sing-box && go test ./route/... ./option/...
   `lint.yml`/`stale.yml`，`test.yml` 改为单 ubuntu job、触发分支 `lightsb`、并**补跑 `test/` 模块**（上游 `./...` 跨不过模块边界）。
   提交 `2994aedb`、`9210529f`、`8fcd24c7`、`8dd73986` 均已推送；`git diff v1.14.2 HEAD` 只落在 AGENTS.md §C2 白名单内，
   `route/route.go` 零 diff。
-- [ ] 未完成：**CI 从未在 GitHub 上跑过**（workflow YAML 只做了本地语法/逻辑核对，Actions 不是调试环境）；
-  → 首次 `workflow_dispatch` 构建 → 打 tag `v1.14.2-lightsb.1` → 下载三个产物核对 §5.1/§5.2/`sing-box version`（含 `-X constant.Version`）。
-  **产物从未实际构建过**（本机只出过 `DEFAULT_BUILD_TAGS_OTHERS` 组合的二进制，未出 glibc/musl naive 产物）。
+- [x] 已完成（2026-10-01，GitHub Actions 实测）：首次 CI 跑通并已发版。
+  - `build-lightsb.yml` run `36800603882`（dispatch）**success**，三 job 全绿（purego/glibc/musl）。
+  - 三产物下载核对：`sing-box version 1.14.2`、`Tags:` 与 `DEFAULT_BUILD_TAGS` 一致（purego/musl 各带 `with_purego`/`with_musl`）、
+    `CGO` 分别 disabled/enabled/enabled、`Revision: 9cef805a`、`libcronet.so` 仅出现在 purego 包、每包含 `LICENSE`；
+    `sing-box check` 含 `override_destination` 三产物均 rc=0，负对照均 rc=1。
+  - 用**发布产物**重跑端到端：`override_destination=false` → TLS 被拒；`=true` → 收到 `pong`。
+  - tag `v1.14.2-lightsb.1` → run `36803236718` **success**，Release 已发布（非 draft/prerelease），
+    三个 asset 齐备，release note 含"非官方修改版，与 SagerNet 无关"；`v*-lightsb.*` 触发器工作正常（**未**打包：因产物命名不含 `-glibc`，
+    `glibc` 那条 job 也产出了 `sing-box-1.14.2-lightsb-linux-amd64.tar.gz`，与上游 `-glibc` 命名不同，见 §4.1）。
+  - `test.yml`（回归门）已由 `disabled_manually` 重新启用，run `36801368476` **success**。
+- [x] 已完成（2026-10-01）：CI 首次运行暴露并修掉一个**真实缺陷**（提交 `464c452d`）——上游的 `test/` 模块其 `go.mod` 相对根 `go.mod` 已陈旧，
+  带 `BUILD_TAGS`（`with_gvisor` 等）编译该模块会因 tailscale/gvisor API 不匹配直接失败；该模块上游从不测试（`go test ./...` 跨不过模块边界），
+  故缺陷长期隐藏。回归用例不需要任何 tag，步骤已改为不带 tag 运行（`-mod=mod` 保留，理由见 §5.2）。
+- [ ] 未完成 / 待决定：产物命名是否给 glibc 包也加 `-glibc` 后缀（当前与上游命名不一一对应）；
+  `test/` 模块的 `go.mod` 陈旧属上游缺陷，本 fork 未修（修会越出 C2 白名单，除 `test/sniff_override_test.go` 外的 test 文件不可改）。
