@@ -416,6 +416,9 @@ go build ./cmd/sing-box && go test ./route/... ./option/...
     无后缀 = purego（含 `libcronet.so`）、`-glibc`、`-musl`；三资产 `Revision: 27fa7c57`，`check` 分别 rc=0/负对照 rc=1，
     端到端 `override_destination` false→被拒 / true→`pong` 复验通过。
     注：更早 dispatch 产物为 `Revision: 9cef805a`，与 tag 版 sha256 不同属预期（独立构建）。
+    发布资产二进制 sha256（本 fork Release，`Revision: 27fa7c57`）：purego `c1cc0de2…`、glibc `2779a7c9…`、musl `bde59acc…`；
+    首轮 dispatch 批次（`Revision: 9cef805a`）分别为 `a9eaf8c9…`/`f2fe9b9c…`/`2ca1104a…`，两批不同属预期。
+    `gh api .../actions/artifacts` 的 `digest` 字段是 **Actions zip 包装层**的 sha256，与 tar.gz 字节不同，勿相互追平。
   - `test.yml`（回归门）已由 `disabled_manually` 重新启用，run `36801368476` **success**。
 - [x] 已完成（2026-10-01）：CI 首次运行暴露并修掉一个**真实缺陷**（提交 `464c452d`）——上游的 `test/` 模块其 `go.mod` 相对根 `go.mod` 已陈旧，
   带 `BUILD_TAGS`（`with_gvisor` 等）编译该模块会因 tailscale/gvisor API 不匹配直接失败；该模块上游从不测试（`go test ./...` 跨不过模块边界），
