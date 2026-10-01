@@ -44,9 +44,10 @@ jobs:
         run: go vet -tags "$BUILD_TAGS" ./option/... ./route/...
       - name: Run fork regression test
         working-directory: test
-        # -mod=mod is required: the checked-in test/go.mod is stale relative to
-        # the root go.mod, so the default -mod=readonly refuses to proceed.
+        # The test/ module is a separate Go module whose checked-in go.mod is
+        # stale relative to the root one, hence -mod=mod. It is deliberately
+        # built without BUILD_TAGS: its own dependency graph predates the
+        # current root go.mod, so with_gvisor/with_dhcp and friends fail to
+        # compile there. The regression test needs none of them.
         run: |
-          go test -mod=mod -v -count=1 \
-            -tags "$BUILD_TAGS" -ldflags "$LDFLAGS_SHARED" \
-            -run 'TestSniffOverrideDestination' .
+          go test -mod=mod -v -count=1 -run 'TestSniffOverrideDestination' .
