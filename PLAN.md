@@ -39,11 +39,11 @@ origin   = https://github.com/kimberxu/lightsb.git    (GitHub fork: fork=true, p
 fork 分支  stable   ← 上游 stable 线镜像，仅 rebase 锚点/升级判断，**不在其上开发**
           lightsb  ← 唯一工作分支，基线 = tag v1.14.2，默认分支
   └─ af6e64c3  Bump version (= v1.14.2)                      ← 基线
-     2994aedb  docs: rewrite fork docs for lightsb            ← 已完成并推送（origin/lightsb）
-     (待做)    sniff: restore override_destination for sniff action (§3)
-     (待做)    test: sniff override_destination regression (§5.2)
-     (待做)    ci: linux-amd64 build workflow (§4.2)
-fork tag   v1.14.2-lightsb.1  ← 对应产物，可追溯
+     2994aedb  docs: rewrite fork docs for lightsb            ← commit 0
+     9210529f  docs: record fork branch pruning               ← commit 1
+     8fcd24c7  sniff: restore override_destination for sniff action  ← commit 2（§3 补丁 + 文档 + schema + §5.2 测试）
+     8dd73986  ci: fork-owned build and test workflows        ← commit 3（§4.2）
+fork tag   v1.14.2-lightsb.1  ← 待打（出包时指向其上产物对应的提交）
 ```
 
 fork 现状（实测，2026-10-01）：**`heads = 2`（`lightsb` 默认分支 + `stable` 镜像）**、`tags = 632`（全部继承自上游、
@@ -294,13 +294,42 @@ sing-box check -c config-with-override.json
 
 参考事实：未打补丁的官方 v1.14.2 对该配置在解析层报未知字段错误（`json: unknown field "override_destination"`；准确文案以实际运行 `sing-box check` 为准），补丁后必须通过。
 
+**已实测（2026-10-01，本机）**：用 `TAGS=DEFAULT_BUILD_TAGS_OTHERS` 编译的二进制（`/tmp/sing-box-lightsb`，117 MB）——
+- 含 `override_destination` 的配置：`check` **rc=0**；
+- 负对照（同位置塞一个未知字段）：`check` 报 `route.rules[0].unknown_field_for_negative_control: json: unknown field "…"` **rc=1**，证明该门不是空转。
+- `sing-box version` 输出 `Tags:` 与 `release/DEFAULT_BUILD_TAGS_OTHERS` 一致、`Revision: 9210529f…`、`CGO: enabled`、版本号 `unknown`（未传 `-X …constant.Version`，见 §4.3）。
+
 ### 5.2 行为回归测试（`test/sniff_override_test.go`，hermetic，不依赖外网/DNS）
 
 **放 `test/` 模块**（`test/go.mod` 有 `replace github.com/sagernet/sing-box => ../`，自动带上补丁；根目录 `go test ./...` 不覆盖该模块，必须单独跑）：
 
 ```bash
-cd test && go test -count=1 -v -run TestSniffOverrideDestination .
+cd test && go test -mod=mod -count=1 -v -run TestSniffOverrideDestination .
+# -mod=mod 是必需的：v1.14.2 仓内的 test/go.mod 未随根 go.mod 更新（缺 sing/quic-go 等升级），
+# 不加会报 "updates to go.mod needed; to update it: go mod tidy"。
+# 该开关会改写 test/go.mod、test/go.sum —— 属白名单外文件，跑完必须 git checkout 还原；
+# 若在 CI 里跑，改为先跑一次 go mod tidy 并把结果提交，或固定 GOFLAGS=-mod=mod。
 ```
+
+**已实测（2026-10-01，本机，`go test -c` 后在无网络敏感路径下直跑二进制）**：
+
+| 场景 | 结果 |
+|---|---|
+| 打过补丁（接线行存在） | `--- PASS: TestSniffOverrideDestination (0.38s)` |
+| 注释掉 `route/rule/rule_action.go` 的 `OverrideDestination:` 接线行（字段/JSON 保留） | `--- FAIL … Received unexpected error: EOF`（握手被 `ip_cidr` reject 掐断） |
+| 恢复接线行后重跑 | `--- PASS` |
+
+即 fail-before → pass-after 双向对照成立（对照方式见下方判定）。
+**端到端独立复核**（真实二进制 + JSON 配置，非 `option.Options` 程序化构造）：同机起 `openssl` 自签 `localhost` 证书的 TLS 服务 127.0.0.1:10002，
+`mixed` 入口 10001 经 SOCKS5 连**字面 IP** 并对 SNI=`localhost` 握手，规则 `[sniff(tls), ip_cidr 127.0.0.1/32 → reject]`：
+
+- `"override_destination": false` → 客户端 `SSLZeroReturnError`（TLS 被拒）；
+- `"override_destination": true` → `OK b'pong'`（收到服务端返回字节）。
+
+两个配置**仅这一个布尔不同**，因此覆盖链路的全部三层：JSON 解析 → `NewRuleAction` 接线 → `route.go` 覆写点。
+
+⚠️ 实测踩坑：`reject` 在**程序化构造** `option.Options` 时 `Method` 为空串，而 `RuleActionReject.Error` 对空 `Method` 会 `panic: unknown reject method:`（默认值只在 `RejectActionOptions.UnmarshalJSON` 里填）。
+测试里必须显式写 `RejectOptions: option.RejectActionOptions{Method: C.RuleActionRejectMethodDefault}`。
 
 复用既有 helper（勿自造）：
 - `startInstance(t, option.Options{...})`（`test/box_test.go:38`）
@@ -363,6 +392,14 @@ go build ./cmd/sing-box && go test ./route/... ./option/...
   删除继承的 39 个分支（`docs`、`dev-*`、`dependabot/*`、`renovate/*`、`copilot/*`、`testing`、`unstable`、`oldstable`、`archive`、
   `ccm-ocm-improvements`、`cloudflared`、`fix-acme-http-tls-challenge`、`draft-windows-auto-redirect`、`revert-4376-*`、`usbip`、`dev-ping` 等），
   现存 ref 仅 `lightsb`(2994aedb) + `stable`(777dec2b)，632 个上游 tag 保留未动。
-- [ ] 未完成（下一步顺序）：落地 §3 补丁提交 → 写 `test/sniff_override_test.go`（§5.2）并做 fail-before/pass-after 验证
-  → 写 `build-lightsb.yml` 并删除上游 workflow（§4.2）→ 首次 Actions 构建 → 下载三个产物核对 §5.1/§5.2/`sing-box version`。
-  **产物与补丁均未实际构建验证过**（仅 `git apply --check` 静态验证）；当前结论来自源码静态核对与官方二进制/API 实测，不构成"已跑通"。
+- [x] 已完成（2026-10-01，实测）：落地 §3 补丁并提交 `8fcd24c7`——`option/rule_action.go`、`route/rule/rule_action.go`、
+  `docs/configuration/route/rule_action{,.zh}.md`、`docs/schema.json`（`make schema` 重生成，diff 仅多 `override_destination: boolean`）、
+  `test/sniff_override_test.go`。验证：`go build`/`go vet` 干净；`sing-box check` 含该字段 rc=0、负对照 rc=1；
+  回归测试 PASS，且注释掉接线行后同用例 FAIL(EOF)——fail-before/pass-after 成立；另有真实二进制+JSON 的端到端对照（见 §5.2）。
+- [x] 已完成（2026-10-01）：§4.2 CI 落地并提交 `8dd73986`——新增 `build-lightsb.yml`，删除上游 `build.yml`/`linux.yml`/`docker.yml`/
+  `lint.yml`/`stale.yml`，`test.yml` 改为单 ubuntu job、触发分支 `lightsb`、并**补跑 `test/` 模块**（上游 `./...` 跨不过模块边界）。
+  提交 `2994aedb`、`9210529f`、`8fcd24c7`、`8dd73986` 均已推送；`git diff v1.14.2 HEAD` 只落在 AGENTS.md §C2 白名单内，
+  `route/route.go` 零 diff。
+- [ ] 未完成：**CI 从未在 GitHub 上跑过**（workflow YAML 只做了本地语法/逻辑核对，Actions 不是调试环境）；
+  → 首次 `workflow_dispatch` 构建 → 打 tag `v1.14.2-lightsb.1` → 下载三个产物核对 §5.1/§5.2/`sing-box version`（含 `-X constant.Version`）。
+  **产物从未实际构建过**（本机只出过 `DEFAULT_BUILD_TAGS_OTHERS` 组合的二进制，未出 glibc/musl naive 产物）。
