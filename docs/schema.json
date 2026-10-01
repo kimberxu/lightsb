@@ -15234,6 +15234,9 @@
             },
             "timeout": {
               "$ref": "#/$defs/Duration"
+            },
+            "override_destination": {
+              "type": "boolean"
             }
           },
           "required": [

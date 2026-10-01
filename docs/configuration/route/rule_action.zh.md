@@ -2,6 +2,10 @@
 icon: material/new-box
 ---
 
+!!! quote "lightsb（本 fork）中的更改"
+
+    :material-plus: [sniff.override_destination](#override_destination)
+
 !!! quote "sing-box 1.13.0 中的更改"
 
     :material-plus: [bypass](#bypass)  
@@ -270,7 +274,8 @@ UDP 连接超时时间。
 {
   "action": "sniff",
   "sniffer": [],
-  "timeout": ""
+  "timeout": "",
+  "override_destination": false
 }
 ```
 
@@ -291,6 +296,21 @@ UDP 连接超时时间。
 探测超时时间。
 
 默认使用 300ms。
+
+#### override_destination
+
+!!! note ""
+
+    此字段为本 fork（lightsb）特有，上游发行版不提供。
+
+使用嗅探得到的域名覆写连接目标地址。
+
+默认使用 `false`。
+
+启用后，若嗅探成功并得到合法域名，则在匹配后续规则之前，把连接目标地址替换为该域名（端口不变）。
+
+注意这同时会改变基于 IP 的规则匹配行为：目标地址变成域名后，`ip_cidr` 规则将不再匹配该连接
+（除非启用了 `rule_set_ip_cidr_match_source`，或已知目标地址列表）。因此依赖 IP 匹配的规则应放在 sniff 规则**之前**。
 
 ### resolve
 

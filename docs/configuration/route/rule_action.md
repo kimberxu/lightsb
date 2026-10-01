@@ -2,6 +2,10 @@
 icon: material/new-box
 ---
 
+!!! quote "Changes in lightsb (this fork)"
+
+    :material-plus: [sniff.override_destination](#override_destination)
+
 !!! quote "Changes in sing-box 1.13.0"
 
     :material-plus: [bypass](#bypass)  
@@ -280,7 +284,8 @@ of accepted values and platform notes.
 {
   "action": "sniff",
   "sniffer": [],
-  "timeout": ""
+  "timeout": "",
+  "override_destination": false
 }
 ```
 
@@ -301,6 +306,24 @@ Available protocol values an be found on in [Protocol Sniff](../sniff/)
 Timeout for sniffing.
 
 `300ms` is used by default.
+
+#### override_destination
+
+!!! note ""
+
+    This field is specific to this fork (lightsb) and is not available in the upstream release.
+
+Override the connection destination with the sniffed domain name.
+
+`false` is used by default.
+
+When enabled, if sniffing succeeds and yields a valid domain name, the connection destination
+is replaced with that domain name before the remaining rules are matched. The port is unchanged.
+
+Note that this also changes how IP based rules match: after the destination becomes a domain
+name, `ip_cidr` rules no longer match the connection (unless `rule_set_ip_cidr_match_source` is
+enabled, or the destination addresses are already known). Rules relying on IP matching should
+therefore be placed **before** the sniff rule.
 
 ### resolve
 
