@@ -1,0 +1,212 @@
+name: Build lightsb
+
+# Fork-only workflow. Produces the same three linux/amd64 tarballs as the
+# upstream v1.14.2 release, with the fork name added to the artifact names.
+#
+# Only workflow_dispatch and fork-owned tags can start this job: a branch push
+# trigger on a public fork would let any contributor with write access burn
+# Actions minutes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to build
+        required: true
+        default: "1.14.2"
+  push:
+    tags:
+      - 'v*-lightsb.*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.variant }}
+    runs-on: ubuntu-26.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { variant: purego }
+          - { variant: glibc }
+          - { variant: musl }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+        with:
+          fetch-depth: 1
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.8
+          cache: false
+
+      - name: Cache Go modules
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/go/pkg/mod
+          key: go-mod-linux-${{ hashFiles('go.sum') }}
+          restore-keys: go-mod-linux-
+
+      - name: Set version
+        run: |
+          set -xeuo pipefail
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            # v1.14.2-lightsb.1 -> 1.14.2
+            VERSION=$(echo "${GITHUB_REF_NAME}" | sed -E 's/^v([0-9.]+)-lightsb\..*$/\1/')
+          else
+            VERSION="${{ inputs.version }}"
+          fi
+          test -n "${VERSION}"
+          echo "VERSION=${VERSION}" >> "${GITHUB_ENV}"
+
+      # Mirrors build.yml:180-216 of the upstream workflow.
+      - name: Clone cronet-go
+        if: matrix.variant != 'purego'
+        run: |
+          set -xeuo pipefail
+          CRONET_GO_VERSION=$(cat .github/CRONET_GO_VERSION)
+          git init ~/cronet-go
+          git -C ~/cronet-go remote add origin https://github.com/sagernet/cronet-go.git
+          git -C ~/cronet-go sparse-checkout set --no-cone '/*' '!/lib'
+          git -C ~/cronet-go fetch --depth=1 --filter=blob:none origin "$CRONET_GO_VERSION"
+          git -C ~/cronet-go checkout FETCH_HEAD
+          git -C ~/cronet-go submodule update --init --recursive --depth=1
+
+      - name: Regenerate Debian keyring
+        if: matrix.variant != 'purego'
+        run: |
+          set -xeuo pipefail
+          rm -f ~/cronet-go/naiveproxy/src/build/linux/sysroot_scripts/keyring.gpg
+          cd ~/cronet-go
+          GPG_TTY=/dev/null ./naiveproxy/src/build/linux/sysroot_scripts/generate_keyring.sh
+
+      - name: Download toolchain
+        if: matrix.variant != 'purego'
+        run: |
+          set -xeuo pipefail
+          cd ~/cronet-go
+          if [[ "${{ matrix.variant }}" == "musl" ]]; then
+            go run ./cmd/build-naive --target=linux/amd64 --libc=musl download-toolchain
+          else
+            go run ./cmd/build-naive --target=linux/amd64 download-toolchain
+          fi
+
+      - name: Setup env
+        if: matrix.variant != 'purego'
+        run: |
+          set -xeuo pipefail
+          cd ~/cronet-go
+          if [[ "${{ matrix.variant }}" == "musl" ]]; then
+            go run ./cmd/build-naive --target=linux/amd64 --libc=musl env >> "${GITHUB_ENV}"
+          else
+            go run ./cmd/build-naive --target=linux/amd64 env >> "${GITHUB_ENV}"
+          fi
+
+      - name: Set build tags
+        run: |
+          set -xeuo pipefail
+          # This workflow only produces -naive- builds, so DEFAULT_BUILD_TAGS
+          # (which contains with_naive_outbound) is always the base.
+          TAGS=$(cat release/DEFAULT_BUILD_TAGS)
+          if [[ "${{ matrix.variant }}" == "purego" ]]; then
+            TAGS="${TAGS},with_purego"
+          elif [[ "${{ matrix.variant }}" == "musl" ]]; then
+            TAGS="${TAGS},with_musl"
+          fi
+          echo "BUILD_TAGS=${TAGS}" >> "${GITHUB_ENV}"
+
+      - name: Set shared ldflags
+        run: echo "LDFLAGS_SHARED=$(cat release/LDFLAGS)" >> "${GITHUB_ENV}"
+
+      - name: Build
+        run: |
+          set -xeuo pipefail
+          mkdir -p dist
+          go build -v -trimpath -o dist/sing-box -tags "${BUILD_TAGS}" \
+          -ldflags "-X 'github.com/sagernet/sing-box/constant.Version=${VERSION}' ${LDFLAGS_SHARED} -s -w -buildid=" \
+          ./cmd/sing-box
+        env:
+          CGO_ENABLED: ${{ matrix.variant == 'purego' && '0' || '1' }}
+          GOOS: linux
+          GOARCH: amd64
+
+      - name: Extract libcronet.so
+        if: matrix.variant == 'purego'
+        run: |
+          set -xeuo pipefail
+          CRONET_GO_VERSION=$(cat .github/CRONET_GO_VERSION)
+          LIBRARY_PATH="lib/linux_amd64/libcronet.so"
+          git init "$RUNNER_TEMP/cronet-go-lib"
+          git -C "$RUNNER_TEMP/cronet-go-lib" remote add origin https://github.com/sagernet/cronet-go.git
+          git -C "$RUNNER_TEMP/cronet-go-lib" sparse-checkout set --no-cone "/$LIBRARY_PATH"
+          git -C "$RUNNER_TEMP/cronet-go-lib" fetch --depth=1 --filter=blob:none origin "$CRONET_GO_VERSION"
+          git -C "$RUNNER_TEMP/cronet-go-lib" checkout FETCH_HEAD
+          cp "$RUNNER_TEMP/cronet-go-lib/$LIBRARY_PATH" dist/
+
+      - name: Archive
+        run: |
+          set -xeuo pipefail
+          SUFFIX=""
+          if [ "${{ matrix.variant }}" != "glibc" ]; then
+            SUFFIX="-${{ matrix.variant }}"
+          fi
+          DIR_NAME="sing-box-${VERSION}-lightsb-linux-amd64${SUFFIX}"
+          cd dist
+          mkdir -p "${DIR_NAME}"
+          cp sing-box "${DIR_NAME}"
+          cp ../LICENSE "${DIR_NAME}"
+          if [ -f libcronet.so ]; then
+            cp libcronet.so "${DIR_NAME}"
+          fi
+          tar -czvf "${DIR_NAME}.tar.gz" "${DIR_NAME}"
+          rm -r "${DIR_NAME}"
+          rm -f sing-box libcronet.so
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-linux_amd64-${{ matrix.variant }}
+          path: dist/*.tar.gz
+
+  release:
+    name: Release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          merge-multiple: true
+          path: dist
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -xeuo pipefail
+          ls -l dist
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "sing-box ${GITHUB_REF_NAME}" \
+            --notes "$(cat <<'EOF'
+          Unofficial modified build. Not affiliated with SagerNet or the sing-box project.
+
+          Based on upstream stable tag v1.14.2. The only functional change is the
+          restored `action: sniff` `override_destination` field, which overrides the
+          connection destination with the sniffed domain name.
+
+          Redistribution of this build is subject to the upstream license
+          (GPLv3+ with the additional naming clause); LICENSE is included in every tarball.
+          EOF
+          )" \
+            dist/*.tar.gz
