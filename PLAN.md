@@ -194,11 +194,14 @@ PATCH
 
 ### 4.1 产物清单（对齐官方 v1.14.2 release 的三个 asset，仅加 fork 标识）
 
-| 产物 | 对应上游矩阵行 | CGO | 额外 tag | 附加文件 |
+| 产物（`-lightsb-` 为 fork 标识，其余与上游逐字同构） | 对应上游矩阵行 | CGO | 额外 tag | 附加文件 |
 |---|---|---|---|---|
 | `sing-box-<ver>-lightsb-linux-amd64.tar.gz` | `{os: linux, arch: amd64, variant: purego, naive: true}` | 0 | `,with_purego` | `libcronet.so` |
 | `sing-box-<ver>-lightsb-linux-amd64-glibc.tar.gz` | `{os: linux, arch: amd64, variant: glibc, naive: true}` | 1 | — | — |
 | `sing-box-<ver>-lightsb-linux-amd64-musl.tar.gz` | `{os: linux, arch: amd64, variant: musl, naive: true}` | 1 | `,with_musl` | — |
+
+**命名映射已实测核对**（`gh api repos/SagerNet/sing-box/releases/tags/v1.14.2` + 下载解包）：上游**无 variant 后缀**的 `linux-amd64.tar.gz` 是 **purego** 包（内含 `libcronet.so`，31.7 MB），`-glibc`/`-musl` 才有后缀。
+因此本 fork 的规则是：**purego 不带后缀**，glibc/musl 带后缀 —— 与上游一致，三包互不冲突。
 
 上游矩阵行号（`.github/workflows/build.yml:94-96`）与 `runs-on: ubuntu-26.04`（`:87`）、`go-version: 1.26.8`（`:148`）均照抄。
 
@@ -406,12 +409,15 @@ go build ./cmd/sing-box && go test ./route/... ./option/...
     `CGO` 分别 disabled/enabled/enabled、`Revision: 9cef805a`、`libcronet.so` 仅出现在 purego 包、每包含 `LICENSE`；
     `sing-box check` 含 `override_destination` 三产物均 rc=0，负对照均 rc=1。
   - 用**发布产物**重跑端到端：`override_destination=false` → TLS 被拒；`=true` → 收到 `pong`。
-  - tag `v1.14.2-lightsb.1` → run `36803236718` **success**，Release 已发布（非 draft/prerelease），
-    三个 asset 齐备，release note 含"非官方修改版，与 SagerNet 无关"；`v*-lightsb.*` 触发器工作正常（**未**打包：因产物命名不含 `-glibc`，
-    `glibc` 那条 job 也产出了 `sing-box-1.14.2-lightsb-linux-amd64.tar.gz`，与上游 `-glibc` 命名不同，见 §4.1）。
+  - tag `v1.14.2-lightsb.1` → Release 已发布（非 draft/prerelease），release note 含"非官方修改版，与 SagerNet 无关"；
+    `v*-lightsb.*` 触发器工作正常。
+    **命名修正**：首次 tag 构建把无后缀给了 glibc（与上游相反，提交 `27fa7c57` 修正）。已删除该 release 与 tag 并用修正后的提交重打
+    `v1.14.2-lightsb.1` → run `36804597144` **success**，重发后的 asset 与上游一一对应：
+    无后缀 = purego（含 `libcronet.so`）、`-glibc`、`-musl`；三资产 `Revision: 27fa7c57`，`check` 分别 rc=0/负对照 rc=1，
+    端到端 `override_destination` false→被拒 / true→`pong` 复验通过。
+    注：更早 dispatch 产物为 `Revision: 9cef805a`，与 tag 版 sha256 不同属预期（独立构建）。
   - `test.yml`（回归门）已由 `disabled_manually` 重新启用，run `36801368476` **success**。
 - [x] 已完成（2026-10-01）：CI 首次运行暴露并修掉一个**真实缺陷**（提交 `464c452d`）——上游的 `test/` 模块其 `go.mod` 相对根 `go.mod` 已陈旧，
   带 `BUILD_TAGS`（`with_gvisor` 等）编译该模块会因 tailscale/gvisor API 不匹配直接失败；该模块上游从不测试（`go test ./...` 跨不过模块边界），
   故缺陷长期隐藏。回归用例不需要任何 tag，步骤已改为不带 tag 运行（`-mod=mod` 保留，理由见 §5.2）。
-- [ ] 未完成 / 待决定：产物命名是否给 glibc 包也加 `-glibc` 后缀（当前与上游命名不一一对应）；
-  `test/` 模块的 `go.mod` 陈旧属上游缺陷，本 fork 未修（修会越出 C2 白名单，除 `test/sniff_override_test.go` 外的 test 文件不可改）。
+- [ ] 已知不修：`test/` 模块的 `go.mod` 陈旧属上游缺陷，本 fork 不修（修会越出 C2 白名单，除 `test/sniff_override_test.go` 外的 test 文件不可改）。
