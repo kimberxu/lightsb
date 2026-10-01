@@ -154,8 +154,14 @@ jobs:
       - name: Archive
         run: |
           set -xeuo pipefail
+          # Mirror the upstream v1.14.2 naming exactly: the unsuffixed package is
+          # the purego one (it carries libcronet.so as a sidecar), while glibc and
+          # musl get a suffix. Verified against the upstream release assets:
+          #   sing-box-1.14.2-linux-amd64.tar.gz        (purego, has libcronet.so)
+          #   sing-box-1.14.2-linux-amd64-glibc.tar.gz
+          #   sing-box-1.14.2-linux-amd64-musl.tar.gz
           SUFFIX=""
-          if [ "${{ matrix.variant }}" != "glibc" ]; then
+          if [ "${{ matrix.variant }}" != "purego" ]; then
             SUFFIX="-${{ matrix.variant }}"
           fi
           DIR_NAME="sing-box-${VERSION}-lightsb-linux-amd64${SUFFIX}"
